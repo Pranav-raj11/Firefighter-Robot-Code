@@ -1,0 +1,590 @@
+#CHIP 16F887
+
+// Components
+#DEFINE MotorL PortB.2
+#DEFINE MotorL2 PortB.3
+#DEFINE MotorR PortB.4
+#DEFINE MotorR2 PortB.5
+#DEFINE WallDet1 PortA.0 // D2, AN0
+#DEFINE WallDet2 PortA.1 // D3, AN1
+#DEFINE LineDet PortA.3 // D5, AN3
+#DEFINE FireDet PortA.5 // D7, AN4
+#DEFINE FanMotor PortB.1
+
+// LCD display
+#DEFINE LCD_IO 4
+#DEFINE LCD_RS portd.0
+#DEFINE LCD_RW portd.1
+#DEFINE LCD_Enable portd.2
+#DEFINE LCD_DB4 portd.4
+#DEFINE LCD_DB5 portd.5
+#DEFINE LCD_DB6 portd.6
+#DEFINE LCD_DB7 portd.7
+
+// Pinout
+Dir MotorL Out
+Dir MotorL2 Out
+Dir MotorR Out
+Dir MotorR2 Out
+Dir LineDet In
+Dir WallDet1 In
+Dir WallDet2 In
+Dir FireDet In
+Dir FanMotor Out
+
+// Variables
+Dim wallDist as byte
+Dim deltaWallDist as byte
+Dim fireValue as byte
+Dim lineCount as byte
+Dim isFire as byte
+Dim fireTrigger as byte
+Dim rightTurns as byte
+// Wall hug variables
+Dim leftDist1 as byte
+Dim leftDist2 as byte
+Dim frontDist as byte
+
+
+// ---------- Void Setup ----------
+FanMotor = false
+LineDet = true
+rightTurns = 0  // Only used for Room 3
+lineCount = 0
+// --- lineCount Legend ---
+// lineCount = 4: Going to / inside Room 3
+// lineCount = 6: Prepare to enter room 4 tunnel
+// lineCount = 7: Room 4 runnel
+// lineCount = 8: Inside room 4
+
+leftDist1 = 9
+leftDist2 = 11
+frontDist = 13
+
+// Adjust values for fire detection
+isFire = 0
+fireTrigger = 5
+stopFireTrigger = 210
+
+// Motors off by default
+MotorL = false
+MotorR = false
+MotorL2 = false
+MotorR2 = false
+
+Do
+	// Read sensory data (Wall, fire, line detection)
+    wallDistF = ReadAD(AN0)
+    wallDistF = (((6787/(wallDistF-3)))-4)/5
+    wallDistL = ReadAD(AN1)
+    wallDistL = (((6787/(wallDistL-3)))-4)/5
+    fireValue = ReadAD(AN4)
+    lineDetValue = ReadAD(AN3)
+
+	// Print variables for debugging
+	CLS
+	Locate 0,0
+	print ("LineCnt: ")
+	print (lineCount)
+	Locate 1,0
+	print("L: ")
+	print (wallDistL)
+	// print ("Front: ")
+	// print (wallDistF)
+	// Locate 1,0
+	// print ("Left: ")
+	// print (wallDistL)
+	// print ("F: ")
+	// print (fireValue)
+	// Locate 1,0
+	// print ("Line Det: ")
+	// print (lineCount)
+
+
+	// Fire activation control
+    if fireValue <= fireTrigger then
+        isFire = 1
+    end if
+    if isFire = 1 then
+        FanMotor = true
+        gosub ExtinguishFire
+
+		// Stop blowing when there's absolutely no fire
+        if fireValue > stopFireTrigger then
+        isFire = 0
+        end if
+    else
+        // ----------- MAIN CODE -----------
+        FanMotor = false
+        gosub WallHug2
+
+        // Room 1
+        gosub LineDetection
+		// Check if fire exists in room 1
+        if lineCount = 2 then
+            gosub RightTurn135
+            fireValue = ReadAD(AN4)
+			// If fire exists, go into the room
+            if (fireValue < 150) then
+                gosub Straight
+                wait 100 ms
+			// If fire doesn't exist
+            else
+				// Continue its path
+                gosub LeftTurn135
+                gosub Straight
+                wait 200 ms
+            end if
+            lineCount = 3
+        // Room 2
+        else if lineCount = 3 then
+            // Wait until the first 90 degree turn
+            if rightTurns = 2 then
+                // Go forward until it reaches the second room
+				gosub Straight
+				wait 1700 ms
+
+				// Turn right and check for flame
+				gosub RightTurn90
+				fireValue = ReadAD(AN4)
+				// If flame exists
+				if (fireValue < 150) then
+					// Go into the room
+					gosub Straight
+					wait 200 ms
+					// Check for fire
+					lineCount = 255
+				// If flame doesn't exist
+				else
+					// Continue its path
+					gosub LeftTurn90
+					
+					// Turn right a bit
+					MotorL = true
+					MotorR = false
+					wait 75 ms
+					MotorL = false
+					gosub Straight
+					wait 200 ms
+
+					// Move to room 3
+					// Imaginary line to stop the code (there's not technically a line there)
+					lineCount = 4
+				end if
+            end if
+		end if
+    end if
+Loop
+
+// --------- PROCEDURES ---------
+
+Sub WallHug2
+	// Turn right when it goes to a corner
+    if wallDistF <= frontDist then
+        gosub RightTurn90
+        rightTurns += 1
+    // If there's no wall to the left
+    else if wallDistL > 30 then
+        // Room 3 code
+		if lineCount = 4 then
+			// Enter room 3 and find fire
+			gosub Straight
+			wait 700 ms
+			gosub LeftTurn90
+			// Go straight until it's at the wall
+			gosub Straight
+			wait 2300 ms
+
+			// Check fire
+			gosub LeftTurn90
+			fireValue = ReadAD(AN4)
+			// If there's fire
+			if (fireValue < 150) then
+				// Head torwards fire
+				gosub Straight
+				wait 600 ms
+				
+				// Blow out fire
+				lineCount = 255
+				isFire = 1
+			// If no fire, exit room 3
+			else
+				gosub LeftTurn90
+
+				// Straight until wall
+				Do until wallDistF < 25
+					// Read sensor
+					wallDistF = ReadAD(AN0)
+					wallDistF = (((6787/(wallDistF-3)))-4)/5
+					gosub Straight
+				loop
+
+				// Proceed to room 4
+				gosub LeftTurn90
+				gosub Straight
+				wait 700 ms
+				
+				// Read wall distance sensors
+				wallDistF = ReadAD(AN0)
+				wallDistF = (((6787/(wallDistF-3)))-4)/5
+				wallDistL = ReadAD(AN1)
+				wallDistL = (((6787/(wallDistL-3)))-4)/5
+
+				// Turn left a bit
+				MotorR = true
+				MotorL = false
+				wait 75 ms
+
+				// Prepare to start wall hugging
+				lineCount = 6
+				CLS
+				print ("Line count: ")
+				print (lineCount)
+
+				// Keep going until nears the wall
+				Do until wallDistL < 14
+					wallDistL = ReadAD(AN1)
+					wallDistL = (((6787/(wallDistL-3)))-4)/5
+					gosub Straight
+				loop
+
+				// Turn right a bit to stick to wall
+				MotorL = true
+				MotorR = false
+				wait 250 ms
+				gosub Straight
+				
+				// Head for room 4, wall hug
+			end if
+		// Room 4 code
+		else if lineCount = 7 then
+			// When time to turn left
+			gosub Straight
+			wait 700 ms
+			gosub LeftAlign
+
+			// Go straight until line detected
+			Do until lineDetValue < 150
+				gosub Straight
+				lineDetValue = ReadAD(AN3)
+			loop
+
+			// Back off a bit
+			gosub Back
+			wait 600 ms
+			gosub EndBack
+			
+			// Head into the actual room 4
+			gosub LeftTurn90
+			CLS
+			print("Going Straight")
+
+			// Straight until wall
+			Do until wallDistF < 10
+				wallDistF = ReadAD(AN0)
+				wallDistF = (((6787/(wallDistF-3)))-4)/5
+				gosub Straight
+			loop
+			gosub Straight
+			wait 70 ms
+			gosub RightTurn90
+
+			// Adjust walldist values for a tighter wall hug inside the small room
+			leftDist1 = 7
+			leftDist2 = 8
+			frontDist = 7
+
+			// Do nothing but wall hug
+			lineCount = 8
+			CLS
+			print("lineCount = 8")
+
+			// Make fire detection less sensitive
+			fireTrigger = 4
+
+		// Turn left upon absense of left wall
+		else if lineCount < 8 then
+			gosub Straight
+			wait 550 ms
+			gosub LeftTurn90
+			gosub Straight
+			wait 800 ms
+			lineCount += 1
+		end if
+	// Actual wall hugging mechanism
+    else if wallDistL <= leftDist1 then
+        gosub TurnRight
+    else if wallDistL >= leftDist2 then
+        gosub TurnLeft
+    else
+        gosub Straight
+    end if
+end sub
+
+Sub LineDetection
+    if lineDetValue < 150 then
+        wait 150 ms
+        lineCount += 1
+    end if
+end sub
+
+Sub ExtinguishFire
+  // Right and back
+  MotorL = true
+  MotorL2 = false
+  MotorR = false
+  MotorR2 = true
+  wait 175 ms
+  MotorL = false
+  MotorL2 = true
+  MotorR = true
+  MotorR2 = false
+  wait 175 ms
+
+  // Left and back
+  MotorR = true
+  MotorR2 = false
+  MotorL = false
+  MotorL2 = true
+  wait 190 ms
+  MotorR = false
+  MotorR2 = true
+  MotorL = true
+  MotorL2 = false
+  wait 175 ms
+end sub
+
+Sub Straight
+  MotorL = true
+  MotorR = true
+  wait 10 ms
+end sub
+
+// Start going backwards
+Sub Back
+	MotorL = false
+	MotorL2 = true
+	MotorR = false
+	MotorR2 = true
+end sub
+
+// Stop going backwards
+Sub EndBack
+	MotorL = false
+	MotorL2 = false
+	MotorR = false
+	MotorR2 = false
+end sub
+
+Sub Stop
+  MotorL = false
+  MotorR = false
+end sub
+
+Sub TurnLeft
+  MotorL = false
+  MotorR = true
+  wait 5 ms
+  MotorL = true
+  MotorR = true
+  wait 5 ms
+end sub
+
+Sub TurnLeftSharp
+  MotorL = false
+  MotorR = true
+  wait 15 ms
+  MotorL = true
+  MotorR = true
+  wait 1 ms
+end sub
+
+Sub TurnRight
+  MotorL = true
+  MotorR = false
+  wait 5 ms
+  MotorL = true
+  MotorR = true
+  wait 5 ms
+end sub
+
+Sub TurnRightSharp
+  MotorL = true
+  MotorR = false
+  wait 15 ms
+  MotorL = true
+  MotorR = true
+  wait 1 ms
+end sub
+
+// Turn right very slowly
+Sub SlightRight
+  MotorL = true
+  MotorR = false
+  wait 1 ms
+  MotorL = true
+  MotorR = true
+  wait 3 ms
+end sub
+
+// Turn left very slowly
+Sub SlightLeft
+  MotorL = false
+  MotorR = true
+  wait 1 ms
+  MotorL = true
+  MotorL = true
+  wait 3 ms
+end sub
+
+Sub LeftTurn90
+  MotorL = false
+  MotorR = false
+  wait 300 ms
+  MotorL = false
+  MotorL2 = true
+  MotorR = true
+  MotorR2 = false
+  wait 405 ms
+  MotorL = false
+  MotorR = false
+  MotorL2 = false
+  MotorR2 = false
+  wait 300 ms
+end sub
+
+Sub RightTurn90
+  MotorL = false
+  MotorR = false
+  wait 300 ms
+  MotorL = true
+  MotorL2 = false
+  MotorR = false
+  MotorR2 = true
+  wait 420 ms
+  MotorL = false
+  MotorR = false
+  MotorL2 = false
+  MotorR2 = false
+  wait 300 ms
+end sub
+
+Sub LeftTurn45
+  MotorL = false
+  MotorR = false
+  wait 300 ms
+  MotorL = false
+  MotorL2 = true
+  MotorR = true
+  MotorR2 = false
+  wait 200 ms
+  MotorL = false
+  MotorR = false
+  MotorL2 = false
+  MotorR2 = false
+  wait 300 ms
+end sub
+
+Sub RightTurn135
+  MotorL = false
+  MotorR = false
+  wait 300 ms
+  MotorL = true
+  MotorL2 = false
+  MotorR = false
+  MotorR2 = true
+  wait 600 ms
+  MotorL = false
+  MotorR = false
+  MotorL2 = false
+  MotorR2 = false
+  wait 300 ms
+end sub
+
+Sub LeftTurn135
+  MotorL = false
+  MotorR = false
+  wait 300 ms
+  MotorL = false
+  MotorL2 = true
+  MotorR = true
+  MotorR2 = false
+  wait 600 ms
+  MotorL = false
+  MotorR = false
+  MotorL2 = false
+  MotorR2 = false
+  wait 300 ms
+end sub
+
+// Align itself parallel against a left wall
+Sub RightAlign
+	gosub Stop
+	wait 1000 ms
+	// Turn right until wallDistF > 40
+	Do Until wallDistF > 40
+		CLS
+		locate (0, 0)
+		print("Aligning")
+		
+		// Don't turn
+		MotorL = false
+		MotorR = true
+		wait 3 ms
+
+		// Turn right slowly
+		MotorL = true
+		MotorL2 = false
+		MotorR = false
+		MotorR2 = true
+		wait 1 ms
+
+		// Read front wall sensors
+		wallDistF = ReadAD(AN0)
+		wallDistF = (((6787/(wallDistF-3)))-4)/5
+	loop
+	wait 20 ms
+
+	// Stop
+	MotorL = false
+	MotorR = false
+	MotorL2 = false
+	MotorR2 = false
+	CLS
+end sub
+
+// Align itself parallel against a right wall
+Sub LeftAlign
+	gosub Stop
+	wait 1000 ms
+	// Turn left until wallDistF > 40
+	Do Until wallDistF > 40
+		CLS
+		locate (0, 0)
+		print("Aligning")
+		
+		// Don't turn
+		MotorL = true
+		MotorR = false
+		wait 3 ms
+
+		// Turn left slowly
+		MotorL = false
+		MotorL2 = true
+		MotorR = true
+		MotorR2 = false
+		wait 1 ms
+
+		// Read front wall sensors
+		wallDistF = ReadAD(AN0)
+		wallDistF = (((6787/(wallDistF-3)))-4)/5
+	loop
+	wait 20 ms
+
+	// Stop
+	MotorL = false
+	MotorR = false
+	MotorL2 = false
+	MotorR2 = false
+	CLS
+end sub

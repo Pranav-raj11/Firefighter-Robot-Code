@@ -1,0 +1,367 @@
+#CHIP 16F887
+
+// Components
+#DEFINE MotorL PortB.2
+#DEFINE MotorL2 PortB.3
+#DEFINE MotorR PortB.4
+#DEFINE MotorR2 PortB.5
+#DEFINE WallDet1 PortA.0 // D2, AN0
+#DEFINE WallDet2 PortA.1 // D3, AN1
+#DEFINE LineDet PortA.3 // D5, AN3
+#DEFINE FireDet PortA.5 // D7, AN4
+#DEFINE FanMotor PortB.1
+
+// LCD display
+#DEFINE LCD_IO 4
+#DEFINE LCD_RS portd.0
+#DEFINE LCD_RW portd.1
+#DEFINE LCD_Enable portd.2
+#DEFINE LCD_DB4 portd.4
+#DEFINE LCD_DB5 portd.5
+#DEFINE LCD_DB6 portd.6
+#DEFINE LCD_DB7 portd.7
+
+// Pinout
+Dir MotorL Out
+Dir MotorL2 Out
+Dir MotorR Out
+Dir MotorR2 Out
+Dir LineDet In
+Dir WallDet1 In
+Dir WallDet2 In
+Dir FireDet In
+Dir FanMotor Out
+
+// Variables
+Dim wallDist as byte
+Dim deltaWallDist as byte
+Dim fireValue as byte
+Dim lineCount as byte
+Dim isFire as byte
+Dim fireTrigger as byte
+Dim wallHug as byte
+
+
+// Void setup
+FanMotor = false
+LineDet = true
+lineCount = 0
+isFire = 0
+fireTrigger = 5
+wallHug = 1
+
+// Motors off by default
+MotorL = false
+MotorR = false
+MotorL2 = false
+MotorR2 = false
+
+Do
+  // Read sensory data (Wall, fire, line detection)
+  wallDistF = ReadAD(AN0)
+  wallDistF = (((6787/(wallDistF-3)))-4)/5
+  wallDistL = ReadAD(AN1)
+  wallDistL = (((6787/(wallDistL-3)))-4)/5
+  fireValue = ReadAD(AN4)
+  lineDetValue = ReadAD(AN3)
+
+  // Printing troubleshooting (when needed)
+  // CLS
+  // Locate 0,0
+  // print("Front: ")
+  // print (wallDistF)
+  // print ("Front: ")
+  // print (wallDistF)
+  // Locate 1,0
+  // print ("Left: ")
+  // print (wallDistL)
+  // print ("F: ")
+  // print (fireValue)
+  // Locate 1,0
+  // print ("Line Det: ")
+  // print (lineCount)
+
+  // Fire activation control
+  if fireValue <= fireTrigger then
+    isFire = 1
+  end if
+  if isFire = 1 then
+    FanMotor = true
+    // Turn right and left to blow out the flame
+    gosub ExtinguishFire
+
+    // Stop blowing when there's absolutely no fire
+    if fireValue > 210 then
+      isFire = 0
+    end if
+  else
+    // ----------- MAIN CODE -----------
+
+    // locate (1, 0)
+    // print("No fire")
+    FanMotor = false
+    
+    // Wall hug using either first or second algorithm
+    if wallHug = 1 then
+      gosub WallHug1
+    else
+      gosub WallHug2
+    end if
+  end if
+Loop
+
+// --------- PROCEDURES ---------
+
+Sub WallHug1
+  // Right sharp when the bot is too far of an angle into the wall
+  if wallDistF =< 10 & wallDistL =< 10 then
+    gosub TurnRightSharp
+  // Turn right using the "align" procedure if the bot hits a corner
+  else if wallDistF =< 10 then
+    gosub Adjust
+  // If the bot is too far from left wall
+  else if wallDistL > 25 then
+    gosub TurnLeftSharp
+  // If the bot is kind of far from left wall
+  else if wallDistL > 20 then
+    gosub TurnLeft
+  // If the bot is too close to the left wall
+  else if wallDistL < 10 then
+    // Turn right
+    MotorL = true
+    MotorR = false
+    wait 100 ms
+  else
+    gosub Straight
+  end if
+
+  // Line detection
+  if lineDetValue < 100 then
+    wait 150 ms
+    lineCount += 1
+  end if
+end sub
+
+Sub WallHug2
+  // When the bot hits a corner
+  if wallDistF < 15 then
+    gosub RightTurn90
+  // No wall to the left
+  else if wallDistL > 25 then
+    // Exiting room 3 to enter room 4
+    if lineCount = 5 then
+      MotorL = true
+      MotorR = true
+      wait 600 ms
+      gosub LeftTurn90
+      gosub Straight
+      wait 1400 ms
+      gosub LeftTurn90
+      gosub Straight
+      wait 3500 ms
+      gosub LeftTurn90
+      gosub Straight
+      wait 650 ms
+      lineCount += 1
+    end if
+  // Actual wall hugging mechanism
+  else if wallDistL <= 9 then
+    gosub TurnRight
+  else if wallDistL >= 11 then
+    gosub TurnLeft
+  else
+    gosub Straight
+  end if
+end sub
+
+
+Sub ExtinguishFire
+  // Right and back
+  MotorL = true
+  MotorL2 = false
+  MotorR = false
+  MotorR2 = true
+  wait 175 ms
+  MotorL = false
+  MotorL2 = true
+  MotorR = true
+  MotorR2 = false
+  wait 175 ms
+
+  // Left and back
+  MotorR = true
+  MotorR2 = false
+  MotorL = false
+  MotorL2 = true
+  wait 190 ms
+  MotorR = false
+  MotorR2 = true
+  MotorL = true
+  MotorL2 = false
+  wait 175 ms
+end sub
+
+Sub Straight
+  MotorL = true
+  MotorR = true
+  wait 10 ms
+end sub
+
+Sub Stop
+  MotorL = false
+  MotorR = false
+end sub
+
+// Have the bot adjust itself when it crashes into a wall
+Sub Adjust
+  // Go backwards
+  MotorL = false
+  MotorR = false
+  MotorL2 = true
+  MotorR2 = true
+  wait 500 ms
+  // Set up motors for forward turn
+  MotorL2 = false
+  MotorR2 = false
+  // Turn right a bit
+  MotorL = true
+  MotorR = false
+  wait 750 ms
+  // Stop
+  MotorL = false
+  MotorR = false
+end sub
+
+Sub TurnLeft
+  MotorL = false
+  MotorR = true
+  wait 5 ms
+  MotorL = true
+  MotorR = true
+  wait 5 ms
+end sub
+
+Sub TurnLeftSharp
+  MotorL = false
+  MotorR = true
+  wait 15 ms
+  MotorL = true
+  MotorR = true
+  wait 1 ms
+end sub
+
+Sub TurnRight
+  MotorL = true
+  MotorR = false
+  wait 5 ms
+  MotorL = true
+  MotorR = true
+  wait 5 ms
+end sub
+
+Sub TurnRightSharp
+  MotorL = true
+  MotorR = false
+  wait 15 ms
+  MotorL = true
+  MotorR = true
+  wait 1 ms
+end sub
+
+// Turn right very slowly
+Sub SlightRight
+  MotorL = true
+  MotorR = false
+  wait 1 ms
+  MotorL = true
+  MotorR = true
+  wait 3 ms
+end sub
+
+// Turn left very slowly
+Sub SlightLeft
+  MotorL = false
+  MotorR = true
+  wait 1 ms
+  MotorL = true
+  MotorL = true
+  wait 3 ms
+end sub
+
+Sub LeftTurn90
+  MotorL = false
+  MotorR = false
+  wait 300 ms
+  MotorL = false
+  MotorL2 = true
+  MotorR = true
+  MotorR2 = false
+  wait 400 ms
+  MotorL = false
+  MotorR = false
+  MotorL2 = false
+  MotorR2 = false
+  wait 300 ms
+end sub
+
+Sub LeftTurn45
+  MotorL = false
+  MotorR = false
+  wait 300 ms
+  MotorL = false
+  MotorL2 = true
+  MotorR = true
+  MotorR2 = false
+  wait 200 ms
+  MotorL = false
+  MotorR = false
+  MotorL2 = false
+  MotorR2 = false
+  wait 300 ms
+end sub
+
+Sub RightTurn90
+  MotorL = false
+  MotorR = false
+  wait 300 ms
+  MotorL = true
+  MotorL2 = false
+  MotorR = false
+  MotorR2 = true
+  wait 435 ms
+  MotorL = false
+  MotorR = false
+  MotorL2 = false
+  MotorR2 = false
+  wait 300 ms
+end sub
+
+// Align itself parallel against the left wall
+Sub Align
+  gosub Stop
+  wait 1000 ms
+  Do Until wallDistF > 40    
+    // Turn left a bit
+    MotorL = false
+    MotorR = true
+    wait 3 ms
+
+    // Turn right parallel to the left wall
+    MotorL = true
+    MotorL2 = false
+    MotorR = false
+    MotorR2 = true
+    wait 1 ms
+
+    // Read front wall sensor
+    wallDistF = ReadAD(AN0)
+    wallDistF = (((6787/(wallDistF-3)))-4)/5
+  loop
+  wait 50 ms
+
+  // Stop
+  MotorL = false
+  MotorR = false
+  MotorL2 = false
+  MotorR2 = false
+end sub
